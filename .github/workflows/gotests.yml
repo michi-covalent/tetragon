@@ -18,7 +18,7 @@ jobs:
         os: [ ubuntu-20.04, buildjet-2vcpu-ubuntu-2204-arm ]
     steps:
     - name: Checkout code
-      uses: actions/checkout@c85c95e3d7251135ab7dc9ce3241c5835cc595a9 # v3.5.3
+      uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       with:
         path: go/src/github.com/cilium/tetragon/
 
@@ -63,7 +63,7 @@ jobs:
 
     - name: Upload Tetragon logs
       if: failure()
-      uses: actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce # v3.1.2
+      uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
       with:
         name: tetragon-json
         path: /tmp/tetragon.gotest*
@@ -71,7 +71,7 @@ jobs:
 
     - name: Upload bugtool dumps
       if: failure()
-      uses: actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18ce # v3.1.2
+      uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
       with:
         name: tetragon-bugtool
         path: /tmp/tetragon-bugtool*
