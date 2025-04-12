@@ -10,6 +10,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"golang.org/x/exp/slices"
 	core_v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/sets"
 
 	cmtypes "github.com/cilium/cilium/pkg/clustermesh/types"
 	"github.com/cilium/cilium/pkg/datapath/types"
@@ -93,16 +94,19 @@ type ServiceCache struct {
 	selfNodeZoneLabel string
 
 	ServiceMutators []func(svc *slim_corev1.Service, svcInfo *Service)
+
+	metrics SVCMetrics
 }
 
 // NewServiceCache returns a new ServiceCache
-func NewServiceCache(nodeAddressing types.NodeAddressing) *ServiceCache {
+func NewServiceCache(nodeAddressing types.NodeAddressing, svcMetrics SVCMetrics) *ServiceCache {
 	return &ServiceCache{
 		services:          map[ServiceID]*Service{},
 		endpoints:         map[ServiceID]*EndpointSlices{},
 		externalEndpoints: map[ServiceID]externalEndpoints{},
 		Events:            make(chan ServiceEvent, option.Config.K8sServiceCacheSize),
 		nodeAddressing:    nodeAddressing,
+		metrics:           svcMetrics,
 	}
 }
 
@@ -207,8 +211,10 @@ func (s *ServiceCache) UpdateService(k8sSvc *slim_corev1.Service, swg *lock.Stop
 		if oldService.DeepEqual(newService) {
 			return svcID
 		}
+		s.metrics.DelService(oldService)
 	}
 
+	s.metrics.AddService(newService)
 	s.services[svcID] = newService
 
 	// Check if the corresponding Endpoints resource is already available
@@ -263,6 +269,7 @@ func (s *ServiceCache) DeleteService(k8sSvc *slim_corev1.Service, swg *lock.Stop
 	delete(s.services, svcID)
 
 	if serviceOK {
+		s.metrics.DelService(oldService)
 		swg.Add()
 		s.Events <- ServiceEvent{
 			Action:    DeleteService,
@@ -272,6 +279,23 @@ func (s *ServiceCache) DeleteService(k8sSvc *slim_corev1.Service, swg *lock.Stop
 			SWG:       swg,
 		}
 	}
+}
+
+// LocalServices returns the list of known services that are not marked as
+// global (i.e., whose backends are all in the local cluster only).
+func (s *ServiceCache) LocalServices() sets.Set[ServiceID] {
+	ids := sets.New[ServiceID]()
+
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+
+	for id, svc := range s.services {
+		if !svc.IncludeExternal {
+			ids.Insert(id)
+		}
+	}
+
+	return ids
 }
 
 // UpdateEndpoints parses a Kubernetes endpoints and adds or updates it in the
@@ -782,4 +806,22 @@ func (s *ServiceCache) updateSelfNodeLabels(labels map[string]string,
 			}
 		}
 	}
+}
+
+type SVCMetrics interface {
+	AddService(svc *Service)
+	DelService(svc *Service)
+}
+
+type svcMetricsNoop struct {
+}
+
+func (s svcMetricsNoop) AddService(svc *Service) {
+}
+
+func (s svcMetricsNoop) DelService(svc *Service) {
+}
+
+func NewSVCMetricsNoop() SVCMetrics {
+	return &svcMetricsNoop{}
 }

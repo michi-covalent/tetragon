@@ -79,12 +79,22 @@ type metadata struct {
 	// generate updates into the ipcache, policy engine and datapath.
 	queuedChangesMU lock.Mutex
 	queuedPrefixes  map[netip.Prefix]struct{}
+
+	// reservedHostLock protects the localHostLabels map. Holders must
+	// always take the metadata read lock first.
+	reservedHostLock lock.Mutex
+
+	// reservedHostLabels collects all labels that apply to the host identity.
+	// see updateLocalHostLabels() for more info.
+	reservedHostLabels map[netip.Prefix]labels.Labels
 }
 
 func newMetadata() *metadata {
 	return &metadata{
 		m:              make(map[netip.Prefix]PrefixInfo),
 		queuedPrefixes: make(map[netip.Prefix]struct{}),
+
+		reservedHostLabels: make(map[netip.Prefix]labels.Labels),
 	}
 }
 
@@ -195,6 +205,9 @@ func (ipc *IPCache) InjectLabels(ctx context.Context, modifiedPrefixes []netip.P
 		// entriesToReplace stores the identity to replace in the ipcache.
 		entriesToReplace = make(map[netip.Prefix]ipcacheEntry)
 		entriesToDelete  = make(map[netip.Prefix]Identity)
+		// unmanagedPrefixes is the set of prefixes for which we no longer have
+		// any metadata, but were created by a call directly to Upsert()
+		unmanagedPrefixes = make(map[netip.Prefix]Identity)
 	)
 
 	ipc.metadata.RLock()
@@ -204,14 +217,13 @@ func (ipc *IPCache) InjectLabels(ctx context.Context, modifiedPrefixes []netip.P
 		oldID, entryExists := ipc.LookupByIP(pstr)
 		oldTunnelIP, oldEncryptionKey := ipc.GetHostIPCache(pstr)
 		prefixInfo := ipc.metadata.getLocked(prefix)
+		var newID *identity.Identity
 		if prefixInfo == nil {
 			if !entryExists {
 				// Already deleted, no new metadata to associate
 				continue
 			} // else continue below to remove the old entry
 		} else {
-			var newID *identity.Identity
-
 			// Insert to propagate the updated set of labels after removal.
 			newID, _, err = ipc.resolveIdentity(ctx, prefix, prefixInfo, identity.InvalidIdentity)
 			if err != nil {
@@ -237,21 +249,43 @@ func (ipc *IPCache) InjectLabels(ctx context.Context, modifiedPrefixes []netip.P
 				break
 			}
 
-			// We can safely skip the ipcache upsert if the entry matches with
-			// the entry in the metadata cache exactly.
-			// Note that checking ID alone is insufficient, see GH-24502.
-			if oldID.ID == newID.ID && prefixInfo.Source() == oldID.Source &&
-				oldTunnelIP.Equal(prefixInfo.TunnelPeer().IP()) &&
-				oldEncryptionKey == prefixInfo.EncryptKey().Uint8() {
-				goto releaseIdentity
+			var newOverwrittenLegacySource source.Source
+			if entryExists {
+				// If an entry already exists for this prefix, then we want to
+				// retain its source, if it has been modified by the legacy API.
+				// This allows us to restore the original source if we remove all
+				// metadata for the prefix
+				switch {
+				case oldID.exclusivelyOwnedByLegacyAPI():
+					// This is the first time we have associated metadata for a
+					// modifiedByLegacyAPI=true entry. Store the old (legacy) source:
+					newOverwrittenLegacySource = oldID.Source
+				case oldID.ownedByLegacyAndMetadataAPI():
+					// The entry has modifiedByLegacyAPI=true, but has already been
+					// updated at least once by the metadata API. Retain the legacy
+					// source as is.
+					newOverwrittenLegacySource = oldID.overwrittenLegacySource
+				}
+
+				// We can safely skip the ipcache upsert if the entry matches with
+				// the entry in the metadata cache exactly.
+				// Note that checking ID alone is insufficient, see GH-24502.
+				if oldID.ID == newID.ID && prefixInfo.Source() == oldID.Source &&
+					oldID.overwrittenLegacySource == newOverwrittenLegacySource &&
+					oldTunnelIP.Equal(prefixInfo.TunnelPeer().IP()) &&
+					oldEncryptionKey == prefixInfo.EncryptKey().Uint8() {
+					goto releaseIdentity
+				}
 			}
 
 			idsToAdd[newID.ID] = newID.Labels.LabelArray()
 			entriesToReplace[prefix] = ipcacheEntry{
 				identity: Identity{
-					ID:                  newID.ID,
-					Source:              prefixInfo.Source(),
-					createdFromMetadata: true,
+					ID:                      newID.ID,
+					Source:                  prefixInfo.Source(),
+					overwrittenLegacySource: newOverwrittenLegacySource,
+					// Note: `modifiedByLegacyAPI` and `shadowed` will be
+					// set by the upsert call itself
 				},
 				tunnelPeer: prefixInfo.TunnelPeer().IP(),
 				encryptKey: prefixInfo.EncryptKey().Uint8(),
@@ -274,14 +308,14 @@ func (ipc *IPCache) InjectLabels(ctx context.Context, modifiedPrefixes []netip.P
 			// allocation from the prior InjectLabels() call by
 			// releasing the previous reference.
 			entry, entryToBeReplaced := entriesToReplace[prefix]
-			if !oldID.createdFromMetadata && entryToBeReplaced {
+			if oldID.exclusivelyOwnedByLegacyAPI() && entryToBeReplaced {
 				// If the previous ipcache entry for the prefix
 				// was not managed by this function, then the
 				// previous ipcache user to inject the IPCache
 				// entry retains its own reference to the
 				// Security Identity. Given that this function
-				// is going to assume responsibility for the
-				// IPCache entry now, this path must retain its
+				// is going to assume (non-exclusive) responsibility
+				// for the IPCache entry now, this path must retain its
 				// own reference to the Security Identity to
 				// ensure that if the other owner ever releases
 				// their reference, this reference stays live.
@@ -299,10 +333,64 @@ func (ipc *IPCache) InjectLabels(ctx context.Context, modifiedPrefixes []netip.P
 			// and the existing IPCache entry was never touched by any other
 			// subsystem using the old Upsert API, then we can safely remove
 			// the IPCache entry associated with this prefix.
-			if prefixInfo == nil && oldID.createdFromMetadata {
-				entriesToDelete[prefix] = oldID
+			if prefixInfo == nil {
+				if oldID.exclusivelyOwnedByMetadataAPI() {
+					entriesToDelete[prefix] = oldID
+				} else if oldID.ownedByLegacyAndMetadataAPI() {
+					// If, on the other hand, this prefix *was* touched by
+					// another, Upsert-based system, then we want to restore
+					// the original (legacy) source. This ensures that the legacy
+					// Delete call (with the legacy source) will be able to remove
+					// it.
+					unmanagedEntry := ipcacheEntry{
+						identity: Identity{
+							ID:                  oldID.ID,
+							Source:              oldID.overwrittenLegacySource,
+							modifiedByLegacyAPI: true,
+						},
+						tunnelPeer: oldTunnelIP,
+						encryptKey: oldEncryptionKey,
+						force:      true, /* overwrittenLegacySource is lower precedence */
+					}
+					entriesToReplace[prefix] = unmanagedEntry
+
+					// In addition, flag this prefix as potentially eligible
+					// for deletion if all references are removed (i.e. the legacy
+					// Delete call already happened).
+					unmanagedPrefixes[prefix] = unmanagedEntry.identity
+
+					if option.Config.Debug {
+						log.WithFields(logrus.Fields{
+							logfields.Prefix:      prefix,
+							logfields.OldIdentity: oldID.ID,
+						}).Debug("Previously managed IPCache entry is now unmanaged")
+					}
+				} else if oldID.exclusivelyOwnedByLegacyAPI() {
+					// Even if we never actually overwrote the legacy-owned
+					// entry, we should still remove it if all references are removed.
+					unmanagedPrefixes[prefix] = oldID
+				}
 			}
 		}
+
+		// The reserved:host identity is special: the numeric ID is fixed,
+		// and the set of labels is mutable. Thus, whenever it changes,
+		// we must always update the SelectorCache (normally, this is elided
+		// when no changes are present).
+		if newID != nil && newID.ID == identity.ReservedIdentityHost {
+			idsToAdd[newID.ID] = newID.Labels.LabelArray()
+		}
+
+		// Again, more reserved:host bookkeeping: if this prefix is no longer ID 1 (because
+		// it is being deleted or changing IDs), we need to recompute the labels
+		// for reserved:host and push that to the SelectorCache
+		if entryExists && oldID.ID == identity.ReservedIdentityHost &&
+			(newID == nil || newID.ID != identity.ReservedIdentityHost) {
+
+			i := ipc.updateReservedHostLabels(prefix, nil)
+			idsToAdd[i.ID] = i.Labels.LabelArray()
+		}
+
 	}
 	// Don't hold lock while calling UpdateIdentities, as it will otherwise run into a deadlock
 	ipc.metadata.RUnlock()
@@ -324,6 +412,7 @@ func (ipc *IPCache) InjectLabels(ctx context.Context, modifiedPrefixes []netip.P
 			meta,
 			entry.identity,
 			entry.force,
+			/* fromLegacyAPI */ false,
 		); err2 != nil {
 			// It's plausible to pull the same information twice
 			// from different sources, for instance in etcd mode
@@ -345,7 +434,7 @@ func (ipc *IPCache) InjectLabels(ctx context.Context, modifiedPrefixes []netip.P
 		}
 	}
 
-	for _, id := range previouslyAllocatedIdentities {
+	for prefix, id := range previouslyAllocatedIdentities {
 		realID := ipc.IdentityAllocator.LookupIdentityByID(ctx, id.ID)
 		if realID == nil {
 			continue
@@ -369,6 +458,16 @@ func (ipc *IPCache) InjectLabels(ctx context.Context, modifiedPrefixes []netip.P
 		// logic for handling the removal of these identities.
 		if released {
 			idsToDelete[id.ID] = nil // SelectorCache removal
+
+			// Corner case: This prefix + identity was initially created by a direct Upsert(),
+			// but all identity references have been released. We should then delete this prefix.
+			if oldID, unmanaged := unmanagedPrefixes[prefix]; unmanaged && oldID.ID == id.ID {
+				entriesToDelete[prefix] = oldID
+				log.WithFields(logrus.Fields{
+					logfields.IPAddr:   prefix,
+					logfields.Identity: id,
+				}).Debug("Force-removing released prefix from the ipcache.")
+			}
 		}
 	}
 	if len(idsToDelete) > 0 {
@@ -452,8 +551,12 @@ func (ipc *IPCache) resolveIdentity(ctx context.Context, prefix netip.Prefix, in
 		// for itself). For all other identities, we avoid modifying
 		// the labels at runtime and instead opt to allocate new
 		// identities below.
-		identity.AddReservedIdentityWithLabels(identity.ReservedIdentityHost, lbls)
-		return identity.LookupReservedIdentity(identity.ReservedIdentityHost), false, nil
+		//
+		// As an extra gotcha, we need need to merge all labels for all IPs
+		// that resolve to the reserved:host identity, otherwise we can
+		// flap identities labels depending on which prefix writes first. See GH-28259.
+		i := ipc.updateReservedHostLabels(prefix, lbls)
+		return i, false, nil
 	}
 
 	// If no other labels are associated with this IP, we assume that it's
@@ -481,6 +584,36 @@ func (ipc *IPCache) resolveIdentity(ctx context.Context, prefix netip.Prefix, in
 		id.CIDRLabel = labels.NewLabelsFromModel([]string{labels.LabelSourceCIDR + ":" + prefix.String()})
 	}
 	return id, isNew, err
+}
+
+// updateReservedHostLabels adds or removes labels that apply to the local host.
+// The `reserved:host` identity is special: the numeric identity is fixed
+// and the set of labels is mutable. (The datapath requires this.) So,
+// we need to determine all prefixes that have the `reserved:host` label and
+// capture their labels. Then, we must aggregate *all* labels from all prefixes and
+// update the labels that correspond to the `reserved:host` identity.
+//
+// This could be termed a meta-ipcache. The ipcache metadata layer aggregates
+// an arbitrary set of resources and labels to a prefix. Here, we are aggregating an arbitrary
+// set of prefixes and labels to an identity.
+func (ipc *IPCache) updateReservedHostLabels(prefix netip.Prefix, lbls labels.Labels) *identity.Identity {
+	ipc.metadata.reservedHostLock.Lock()
+	defer ipc.metadata.reservedHostLock.Unlock()
+	if lbls == nil {
+		delete(ipc.metadata.reservedHostLabels, prefix)
+	} else {
+		ipc.metadata.reservedHostLabels[prefix] = lbls
+	}
+
+	// aggregate all labels and update static identity
+	newLabels := labels.NewFrom(labels.LabelHost)
+	for _, l := range ipc.metadata.reservedHostLabels {
+		newLabels.MergeLabels(l)
+	}
+
+	log.WithField(logfields.Labels, newLabels).Debug("Merged labels for reserved:host identity")
+
+	return identity.AddReservedIdentityWithLabels(identity.ReservedIdentityHost, newLabels)
 }
 
 // RemoveLabelsExcluded removes the given labels from all IPs inside the IDMD

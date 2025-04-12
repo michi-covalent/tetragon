@@ -5,6 +5,7 @@ package types
 
 import (
 	"encoding/json"
+	"fmt"
 	"net"
 	"path"
 	"strings"
@@ -68,6 +69,7 @@ func ParseCiliumNode(n *ciliumv2.CiliumNode) (node Node) {
 		Annotations:     n.ObjectMeta.Annotations,
 		NodeIdentity:    uint32(n.Spec.NodeIdentity),
 		WireguardPubKey: wireguardPubKey,
+		BootID:          n.Spec.BootID,
 	}
 
 	for _, cidrString := range n.Spec.IPAM.PodCIDRs {
@@ -182,6 +184,7 @@ func (n *Node) ToCiliumNode() *ciliumv2.CiliumNode {
 				PodCIDRs: podCIDRs,
 			},
 			NodeIdentity: uint64(n.NodeIdentity),
+			BootID:       n.BootID,
 		},
 	}
 }
@@ -201,6 +204,16 @@ func (n *RegisterNode) GetKeyName() string {
 // DeepKeyCopy creates a deep copy of the LocalKey
 func (n *RegisterNode) DeepKeyCopy() store.LocalKey {
 	return n.DeepCopy()
+}
+
+func (n *RegisterNode) Unmarshal(_ string, data []byte) error {
+	newNode := Node{}
+	if err := json.Unmarshal(data, &newNode); err != nil {
+		return err
+	}
+
+	n.Node = newNode
+	return nil
 }
 
 // Node contains the nodes name, the list of addresses to this address
@@ -267,6 +280,9 @@ type Node struct {
 
 	// WireguardPubKey is the WireGuard public key of this node
 	WireguardPubKey string
+
+	// BootID is a unique node identifier generated on boot
+	BootID string
 }
 
 // Fullname returns the node's full name including the cluster name if a
@@ -581,7 +597,7 @@ func (n *Node) GetIPv6AllocCIDRs() []*cidr.CIDR {
 	if n.IPv6AllocCIDR != nil {
 		result = append(result, n.IPv6AllocCIDR)
 	}
-	if len(n.IPv4SecondaryAllocCIDRs) > 0 {
+	if len(n.IPv6SecondaryAllocCIDRs) > 0 {
 		result = append(result, n.IPv6SecondaryAllocCIDRs...)
 	}
 	return result
@@ -623,6 +639,15 @@ func (n *Node) Unmarshal(_ string, data []byte) error {
 	*n = newNode
 
 	return nil
+}
+
+// LogRepr returns a representation of the node to be used for logging
+func (n *Node) LogRepr() string {
+	b, err := n.Marshal()
+	if err != nil {
+		return fmt.Sprintf("%#v", n)
+	}
+	return string(b)
 }
 
 func (n *Node) validate() error {

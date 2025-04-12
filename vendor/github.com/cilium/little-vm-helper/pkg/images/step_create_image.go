@@ -5,13 +5,16 @@ package images
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
 
+	"github.com/cilium/little-vm-helper/pkg/arch"
 	"github.com/cilium/little-vm-helper/pkg/logcmd"
 	"github.com/cilium/little-vm-helper/pkg/step"
 	"github.com/sirupsen/logrus"
@@ -21,7 +24,7 @@ var (
 	// DelImageIfExists: if set to true, image will be deleted at Cleanup() by the CreateImage step
 	DelImageIfExists = "DelImageIfExist"
 
-	rootDev    = "/dev/sda"
+	rootDev    = "/dev/vda"
 	rootFsType = "ext4"
 	resizeFS   = "resize2fs"
 )
@@ -49,17 +52,11 @@ var (
 
 type CreateImage struct {
 	*StepConf
-	bootable bool
 }
 
 func NewCreateImage(cnf *StepConf) *CreateImage {
 	return &CreateImage{
 		StepConf: cnf,
-		// NB(kkourt): for now all the images we create are bootable because we can always
-		// boot them by directly specifing -kernel in qemu. Kept this, however, in case at
-		// some point we want to change it. Note, also, that because all images are
-		// bootable, it is sufficient to do create root bootable images.
-		bootable: true,
 	}
 }
 
@@ -74,11 +71,19 @@ append initrd=initrd.img root=%s rw console=ttyS0
 
 // makeRootImage creates a root (with respect to the image forest hierarch) image
 func (s *CreateImage) makeRootImage(ctx context.Context) error {
+	if s == nil || s.imgCnf == nil {
+		return errors.New("step configuration or image configuration is nil")
+	}
 	imgFname := filepath.Join(s.imagesDir, s.imgCnf.Name)
 	tarFname := path.Join(s.imagesDir, fmt.Sprintf("%s.tar", s.imgCnf.Name))
+	iarch, err := arch.NewArch(runtime.GOARCH)
+	if err != nil {
+		return err
+	}
+	bootable := iarch.Bootable(s.imgCnf.Bootable)
 	// build package list: add a kernel if building a bootable image
 	packages := make([]string, 0, len(s.imgCnf.Packages)+1)
-	if s.bootable {
+	if bootable {
 		packages = append(packages, "linux-image-amd64")
 	}
 	packages = append(packages, s.imgCnf.Packages...)
@@ -88,7 +93,7 @@ func (s *CreateImage) makeRootImage(ctx context.Context) error {
 		"--include", strings.Join(packages, ","),
 		tarFname,
 	)
-	err := logcmd.RunAndLogCommand(cmd, s.log)
+	err = logcmd.RunAndLogCommand(cmd, s.log)
 	if err != nil {
 		return err
 	}
@@ -104,8 +109,8 @@ func (s *CreateImage) makeRootImage(ctx context.Context) error {
 		imgSize = size
 	}
 
-	// example: guestfish -N foo.img=disk:8G -- mkfs ext4 /dev/sda : mount /dev/sda / : tar-in /tmp/foo.tar /
-	if s.bootable {
+	// example: guestfish -N foo.img=disk:8G -- mkfs ext4 /dev/vda : mount /dev/vda / : tar-in /tmp/foo.tar /
+	if bootable {
 		dirname, err := os.MkdirTemp("", "extlinux-")
 		if err != nil {
 			return err
