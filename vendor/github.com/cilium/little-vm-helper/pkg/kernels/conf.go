@@ -23,6 +23,8 @@ type KernelConf struct {
 	URL string `json:"url"`
 	// config options
 	Opts []ConfigOption `json:"opts,omitempty"`
+	// Extra make args
+	ExtraMakeArgs []string `json:"extra_make_args,omitempty"`
 }
 
 type Conf struct {
@@ -62,8 +64,8 @@ var ConfigOptGroups = map[string][]ConfigOption{
 		// NB: is not disabled from the final config
 		// {"--disable", "CONFIG_CDROM"},
 		{"--disable", "CONFIG_ISO9669_FS"},
-		// wireless
 		{"--disable", "CONFIG_CFG80211"},
+		{"--disable", "CONFIG_WIRELESS"},
 		{"--disable", "CONFIG_RFKILL"},
 		{"--disable", "CONFIG_MACINTOSH_DRIVERS"},
 		{"--disable", "CONFIG_SOUND"},
@@ -72,6 +74,11 @@ var ConfigOptGroups = map[string][]ConfigOption{
 		{"--disable", "CONFIG_USB"},
 		{"--disable", "CONFIG_WLAN"},
 		{"--disable", "CONFIG_HID"},
+		{"--disable", "CONFIG_I2C"},
+		{"--disable", "CONFIG_PCMCIA"},
+		{"--disable", "CONFIG_MD"},
+		{"--disable", "CONFIG_DMADEVICES"},
+		{"--disable", "CONFIG_THERMAL"},
 	},
 	"bpf": []ConfigOption{
 		{"--enable", "CONFIG_BPF"},
@@ -189,8 +196,10 @@ func (cnf *Conf) getOptions(kc *KernelConf) []ConfigOption {
 	}
 
 	// then kernel-specific options
-	for _, opts := range kc.Opts {
-		ret = append(ret, opts)
+	if kc != nil {
+		for _, opts := range kc.Opts {
+			ret = append(ret, opts)
+		}
 	}
 
 	return ret

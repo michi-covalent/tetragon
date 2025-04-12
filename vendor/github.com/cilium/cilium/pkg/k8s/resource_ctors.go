@@ -13,7 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/tools/cache"
 
-	"github.com/cilium/cilium/pkg/hive"
+	"github.com/cilium/cilium/pkg/hive/cell"
 	cilium_api_v2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
 	cilium_api_v2alpha1 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2alpha1"
 	"github.com/cilium/cilium/pkg/k8s/client"
@@ -21,12 +21,13 @@ import (
 	slim_corev1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/api/core/v1"
 	slim_discoveryv1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/api/discovery/v1"
 	slim_discoveryv1beta1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/api/discovery/v1beta1"
+	slim_networkingv1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/api/networking/v1"
 	"github.com/cilium/cilium/pkg/k8s/types"
 	"github.com/cilium/cilium/pkg/k8s/utils"
 	"github.com/cilium/cilium/pkg/option"
 )
 
-func ServiceResource(lc hive.Lifecycle, cs client.Clientset, opts ...func(*metav1.ListOptions)) (resource.Resource[*slim_corev1.Service], error) {
+func ServiceResource(lc cell.Lifecycle, cs client.Clientset, opts ...func(*metav1.ListOptions)) (resource.Resource[*slim_corev1.Service], error) {
 	if !cs.IsEnabled() {
 		return nil, nil
 	}
@@ -41,7 +42,7 @@ func ServiceResource(lc hive.Lifecycle, cs client.Clientset, opts ...func(*metav
 	return resource.New[*slim_corev1.Service](lc, lw, resource.WithMetric("Service")), nil
 }
 
-func NodeResource(lc hive.Lifecycle, cs client.Clientset, opts ...func(*metav1.ListOptions)) (resource.Resource[*slim_corev1.Node], error) {
+func NodeResource(lc cell.Lifecycle, cs client.Clientset, opts ...func(*metav1.ListOptions)) (resource.Resource[*slim_corev1.Node], error) {
 	if !cs.IsEnabled() {
 		return nil, nil
 	}
@@ -52,7 +53,7 @@ func NodeResource(lc hive.Lifecycle, cs client.Clientset, opts ...func(*metav1.L
 	return resource.New[*slim_corev1.Node](lc, lw, resource.WithMetric("Node")), nil
 }
 
-func CiliumNodeResource(lc hive.Lifecycle, cs client.Clientset, opts ...func(*metav1.ListOptions)) (resource.Resource[*cilium_api_v2.CiliumNode], error) {
+func CiliumNodeResource(lc cell.Lifecycle, cs client.Clientset, opts ...func(*metav1.ListOptions)) (resource.Resource[*cilium_api_v2.CiliumNode], error) {
 	if !cs.IsEnabled() {
 		return nil, nil
 	}
@@ -63,7 +64,7 @@ func CiliumNodeResource(lc hive.Lifecycle, cs client.Clientset, opts ...func(*me
 	return resource.New[*cilium_api_v2.CiliumNode](lc, lw, resource.WithMetric("CiliumNode")), nil
 }
 
-func PodResource(lc hive.Lifecycle, cs client.Clientset, opts ...func(*metav1.ListOptions)) (resource.Resource[*slim_corev1.Pod], error) {
+func PodResource(lc cell.Lifecycle, cs client.Clientset, opts ...func(*metav1.ListOptions)) (resource.Resource[*slim_corev1.Pod], error) {
 	if !cs.IsEnabled() {
 		return nil, nil
 	}
@@ -74,7 +75,7 @@ func PodResource(lc hive.Lifecycle, cs client.Clientset, opts ...func(*metav1.Li
 	return resource.New[*slim_corev1.Pod](lc, lw, resource.WithMetric("Pod")), nil
 }
 
-func NamespaceResource(lc hive.Lifecycle, cs client.Clientset, opts ...func(*metav1.ListOptions)) (resource.Resource[*slim_corev1.Namespace], error) {
+func NamespaceResource(lc cell.Lifecycle, cs client.Clientset, opts ...func(*metav1.ListOptions)) (resource.Resource[*slim_corev1.Namespace], error) {
 	if !cs.IsEnabled() {
 		return nil, nil
 	}
@@ -85,7 +86,7 @@ func NamespaceResource(lc hive.Lifecycle, cs client.Clientset, opts ...func(*met
 	return resource.New[*slim_corev1.Namespace](lc, lw, resource.WithMetric("Namespace")), nil
 }
 
-func LBIPPoolsResource(lc hive.Lifecycle, cs client.Clientset, opts ...func(*metav1.ListOptions)) (resource.Resource[*cilium_api_v2alpha1.CiliumLoadBalancerIPPool], error) {
+func LBIPPoolsResource(lc cell.Lifecycle, cs client.Clientset, opts ...func(*metav1.ListOptions)) (resource.Resource[*cilium_api_v2alpha1.CiliumLoadBalancerIPPool], error) {
 	if !cs.IsEnabled() {
 		return nil, nil
 	}
@@ -96,7 +97,7 @@ func LBIPPoolsResource(lc hive.Lifecycle, cs client.Clientset, opts ...func(*met
 	return resource.New[*cilium_api_v2alpha1.CiliumLoadBalancerIPPool](lc, lw, resource.WithMetric("CiliumLoadBalancerIPPool")), nil
 }
 
-func CiliumIdentityResource(lc hive.Lifecycle, cs client.Clientset, opts ...func(*metav1.ListOptions)) (resource.Resource[*cilium_api_v2.CiliumIdentity], error) {
+func CiliumIdentityResource(lc cell.Lifecycle, cs client.Clientset, opts ...func(*metav1.ListOptions)) (resource.Resource[*cilium_api_v2.CiliumIdentity], error) {
 	if !cs.IsEnabled() {
 		return nil, nil
 	}
@@ -107,7 +108,7 @@ func CiliumIdentityResource(lc hive.Lifecycle, cs client.Clientset, opts ...func
 	return resource.New[*cilium_api_v2.CiliumIdentity](lc, lw, resource.WithMetric("CiliumIdentityList")), nil
 }
 
-func CiliumNetworkPolicyResource(lc hive.Lifecycle, cs client.Clientset, opts ...func(*metav1.ListOptions)) (resource.Resource[*cilium_api_v2.CiliumNetworkPolicy], error) {
+func CiliumNetworkPolicyResource(lc cell.Lifecycle, cs client.Clientset, opts ...func(*metav1.ListOptions)) (resource.Resource[*cilium_api_v2.CiliumNetworkPolicy], error) {
 	if !cs.IsEnabled() {
 		return nil, nil
 	}
@@ -118,7 +119,7 @@ func CiliumNetworkPolicyResource(lc hive.Lifecycle, cs client.Clientset, opts ..
 	return resource.New[*cilium_api_v2.CiliumNetworkPolicy](lc, lw, resource.WithMetric("CiliumNetworkPolicy")), nil
 }
 
-func CiliumClusterwideNetworkPolicyResource(lc hive.Lifecycle, cs client.Clientset, opts ...func(*metav1.ListOptions)) (resource.Resource[*cilium_api_v2.CiliumClusterwideNetworkPolicy], error) {
+func CiliumClusterwideNetworkPolicyResource(lc cell.Lifecycle, cs client.Clientset, opts ...func(*metav1.ListOptions)) (resource.Resource[*cilium_api_v2.CiliumClusterwideNetworkPolicy], error) {
 	if !cs.IsEnabled() {
 		return nil, nil
 	}
@@ -129,7 +130,7 @@ func CiliumClusterwideNetworkPolicyResource(lc hive.Lifecycle, cs client.Clients
 	return resource.New[*cilium_api_v2.CiliumClusterwideNetworkPolicy](lc, lw, resource.WithMetric("CiliumClusterwideNetworkPolicy")), nil
 }
 
-func CiliumCIDRGroupResource(lc hive.Lifecycle, cs client.Clientset, opts ...func(*metav1.ListOptions)) (resource.Resource[*cilium_api_v2alpha1.CiliumCIDRGroup], error) {
+func CiliumCIDRGroupResource(lc cell.Lifecycle, cs client.Clientset, opts ...func(*metav1.ListOptions)) (resource.Resource[*cilium_api_v2alpha1.CiliumCIDRGroup], error) {
 	if !cs.IsEnabled() {
 		return nil, nil
 	}
@@ -140,7 +141,7 @@ func CiliumCIDRGroupResource(lc hive.Lifecycle, cs client.Clientset, opts ...fun
 	return resource.New[*cilium_api_v2alpha1.CiliumCIDRGroup](lc, lw, resource.WithMetric("CiliumCIDRGroup")), nil
 }
 
-func CiliumPodIPPoolResource(lc hive.Lifecycle, cs client.Clientset, opts ...func(*metav1.ListOptions)) (resource.Resource[*cilium_api_v2alpha1.CiliumPodIPPool], error) {
+func CiliumPodIPPoolResource(lc cell.Lifecycle, cs client.Clientset, opts ...func(*metav1.ListOptions)) (resource.Resource[*cilium_api_v2alpha1.CiliumPodIPPool], error) {
 	if !cs.IsEnabled() {
 		return nil, nil
 	}
@@ -151,7 +152,7 @@ func CiliumPodIPPoolResource(lc hive.Lifecycle, cs client.Clientset, opts ...fun
 	return resource.New[*cilium_api_v2alpha1.CiliumPodIPPool](lc, lw, resource.WithMetric("CiliumPodIPPool")), nil
 }
 
-func EndpointsResource(lc hive.Lifecycle, cs client.Clientset) (resource.Resource[*Endpoints], error) {
+func EndpointsResource(lc cell.Lifecycle, cs client.Clientset) (resource.Resource[*Endpoints], error) {
 	if !cs.IsEnabled() {
 		return nil, nil
 	}
@@ -241,7 +242,7 @@ func transformEndpoint(obj any) (any, error) {
 	}
 }
 
-func CiliumSlimEndpointResource(lc hive.Lifecycle, cs client.Clientset, opts ...func(*metav1.ListOptions)) (resource.Resource[*types.CiliumEndpoint], error) {
+func CiliumSlimEndpointResource(lc cell.Lifecycle, cs client.Clientset, opts ...func(*metav1.ListOptions)) (resource.Resource[*types.CiliumEndpoint], error) {
 	if !cs.IsEnabled() {
 		return nil, nil
 	}
@@ -254,4 +255,14 @@ func CiliumSlimEndpointResource(lc hive.Lifecycle, cs client.Clientset, opts ...
 			return &cilium_api_v2.CiliumEndpoint{}
 		}, TransformToCiliumEndpoint),
 	), nil
+}
+
+func IngressClassResource(lc cell.Lifecycle, cs client.Clientset, opts ...func(*metav1.ListOptions)) (resource.Resource[*slim_networkingv1.IngressClass], error) {
+	if !cs.IsEnabled() {
+		return nil, nil
+	}
+	lw := utils.ListerWatcherWithModifiers(
+		utils.ListerWatcherFromTyped[*slim_networkingv1.IngressClassList](cs.Slim().NetworkingV1().IngressClasses()), opts...,
+	)
+	return resource.New[*slim_networkingv1.IngressClass](lc, lw, resource.WithMetric("IngressClass")), nil
 }
